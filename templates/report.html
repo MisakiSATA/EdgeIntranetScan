@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}报告 - 边缘安全审计工具{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2 class="mb-4"><i class="bi bi-file-earmark-text"></i> 审计报告</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-header">报告类型</div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <button class="btn btn-primary" onclick="generateReport('summary')">
+                        <i class="bi bi-file-text"></i> 摘要报告
+                    </button>
+                    <button class="btn btn-success" onclick="generateReport('full')">
+                        <i class="bi bi-file-earmark-text"></i> 完整报告
+                    </button>
+                    <button class="btn btn-info" onclick="generateReport('vulnerabilities')">
+                        <i class="bi bi-bug"></i> 漏洞报告
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">导出格式</div>
+            <div class="card-body">
+                <div class="btn-group w-100" role="group">
+                    <button type="button" class="btn btn-outline-primary" onclick="exportReport('markdown')">MD</button>
+                    <button type="button" class="btn btn-outline-primary" onclick="exportReport('json')">JSON</button>
+                    <button type="button" class="btn btn-outline-primary" onclick="exportReport('html')">HTML</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-9">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">报告内容</h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="copyReport()">
+                        <i class="bi bi-clipboard"></i> 复制
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="downloadReport()">
+                        <i class="bi bi-download"></i> 下载
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="reportContent" style="max-height: 600px; overflow-y: auto;">
+                    <p class="text-muted text-center py-5">
+                        <i class="bi bi-file-earmark-text fs-1"></i>
+                        <br>请选择报告类型并生成
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentReport = null;
+
+function generateReport(type) {
+    const contentDiv = document.getElementById('reportContent');
+    contentDiv.innerHTML = '<div class="text-center"><div class="spinner-border"></div><p>生成中...</p></div>';
+
+    fetch('/api/report/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({type})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            currentReport = data.data;
+            displayReport(data.data, type);
+        } else {
+            contentDiv.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
+        }
+    })
+    .catch(err => {
+        contentDiv.innerHTML = `<div class="alert alert-danger">生成失败: ${err}</div>`;
+    });
+}
+
+function displayReport(data, type) {
+    const contentDiv = document.getElementById('reportContent');
+
+    if (type === 'summary') {
+        let html = '<h4>审计摘要报告</h4>';
+        html += '<hr>';
+        html += '<h5>主机统计</h5>';
+        html += `<p>发现主机: <strong>${data.host_count || 0}</strong> 台</p>`;
+
+        if (data.vuln_stats && data.vuln_stats.length > 0) {
+            html += '<h5 class="mt-3">漏洞统计</h5>';
+            html += '<table class="table table-sm">';
+            html += '<thead><tr><th>严重程度</th><th>数量</th></tr></thead><tbody>';
+
+            data.vuln_stats.forEach(stat => {
+                const badgeClass = {
+                    'critical': 'danger',
+                    'high': 'danger',
+                    'medium': 'warning',
+                    'low': 'info',
+                    'info': 'secondary'
+                }[stat.severity] || 'secondary';
+
+                html += `<tr>
+                    <td><span class="badge bg-${badgeClass}">${stat.severity.toUpperCase()}</span></td>
+                    <td>${stat.count}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table>';
+        }
+
+        html += '<p class="text-muted mt-3">生成时间: ' + new Date().toLocaleString() + '</p>';
+        contentDiv.innerHTML = html;
+    }
+    else if (type === 'full') {
+        let html = '<h4>完整审计报告</h4>';
+        html += '<hr>';
+
+        // 主机列表
+        if (data.hosts && data.hosts.length > 0) {
+            html += '<h5>发现的主机 (' + data.hosts.length + ')</h5>';
+            html += '<div class="table-responsive"><table class="table table-sm table-bordered">';
+            html += '<thead><tr><th>IP</th><th>MAC</th><th>厂商</th><th>状态</th><th>端口</th><th>最后发现</th></tr></thead><tbody>';
+
+            data.hosts.forEach(host => {
+                html += `<tr>
+                    <td>${host.ip || '-'}</td>
+                    <td>${host.mac || '-'}</td>
+                    <td>${host.vendor || '-'}</td>
+                    <td>${host.status || '-'}</td>
+                    <td>${host.ports || '-'}</td>
+                    <td>${host.last_seen || '-'}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+        } else {
+            html += '<p class="text-muted">暂无主机记录</p>';
+        }
+
+        // 扫描历史
+        if (data.scan_history && data.scan_history.length > 0) {
+            html += '<h5 class="mt-4">扫描历史</h5>';
+            html += '<div class="table-responsive"><table class="table table-sm table-bordered">';
+            html += '<thead><tr><th>时间</th><th>类型</th><th>目标</th><th>结果</th></tr></thead><tbody>';
+
+            data.scan_history.forEach(scan => {
+                html += `<tr>
+                    <td>${scan.scan_time || '-'}</td>
+                    <td>${scan.scan_type || '-'}</td>
+                    <td>${scan.target || '-'}</td>
+                    <td class="small">${scan.result || '-'}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+        } else {
+            html += '<p class="text-muted">暂无扫描历史</p>';
+        }
+
+        html += '<p class="text-muted mt-3">生成时间: ' + new Date().toLocaleString() + '</p>';
+        contentDiv.innerHTML = html;
+    }
+    else if (type === 'vulnerabilities') {
+        contentDiv.innerHTML = '<div class="alert alert-info">漏洞报告功能开发中，请使用摘要报告</div>';
+    }
+}
+
+function exportReport(format) {
+    if (!currentReport) {
+        alert('请先生成报告');
+        return;
+    }
+
+    // TODO: 实现导出功能
+    alert(`导出为 ${format.toUpperCase()} 格式功能开发中`);
+}
+
+function copyReport() {
+    const content = document.getElementById('reportContent').innerText;
+    navigator.clipboard.writeText(content).then(() => {
+        alert('已复制到剪贴板');
+    }).catch(() => {
+        alert('复制失败');
+    });
+}
+
+function downloadReport() {
+    if (!currentReport) {
+        alert('请先生成报告');
+        return;
+    }
+
+    const content = document.getElementById('reportContent').innerText;
+    const blob = new Blob([content], {type: 'text/plain'});
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit_report_${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+}
+</script>
+{% endblock %}

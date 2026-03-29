@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}漏洞扫描 - 边缘安全审计工具{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2>漏洞扫描</h2>
+        </div>
+    </div>
+
+    <!-- 扫描配置 -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">扫描设置</div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-8">
+                            <label>目标URL/IP</label>
+                            <input type="text" class="form-control" id="targetInput"
+                                   placeholder="http://192.168.1.1 或 192.168.1.1" value="127.0.0.1">
+                            <small class="text-muted">支持URL或IP地址</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-primary w-100" onclick="startScan()">开始扫描</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 扫描结果 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">扫描结果</div>
+                <div class="card-body">
+                    <!-- 扫描状态 -->
+                    <div id="scanStatus" style="display:none;" class="alert alert-info mb-3">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        正在扫描，请稍候...
+                    </div>
+
+                    <!-- 结果显示 -->
+                    <div id="scanResult">
+                        <p class="text-muted text-center py-4">
+                            请输入目标并点击"开始扫描"
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startScan() {
+    const target = document.getElementById('targetInput').value.trim();
+
+    if (!target) {
+        alert('请输入目标');
+        return;
+    }
+
+    const statusDiv = document.getElementById('scanStatus');
+    const resultDiv = document.getElementById('scanResult');
+
+    statusDiv.style.display = 'block';
+    resultDiv.innerHTML = '';
+
+    fetch('/api/scan/vulns', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        statusDiv.style.display = 'none';
+
+        if (data.success) {
+            displayResult(data.data);
+        } else {
+            resultDiv.innerHTML = '<div class="alert alert-danger">' + data.message + '</div>';
+        }
+    })
+    .catch(err => {
+        statusDiv.style.display = 'none';
+        resultDiv.innerHTML = '<div class="alert alert-danger">请求失败: ' + err + '</div>';
+    });
+}
+
+function displayResult(data) {
+    const resultDiv = document.getElementById('scanResult');
+
+    if (!data.vulnerabilities || data.vulnerabilities.length === 0) {
+        resultDiv.innerHTML = '<div class="alert alert-success">未发现安全问题</div>';
+        return;
+    }
+
+    let html = '<div class="alert alert-info">';
+    html += '扫描完成，发现 <strong>' + data.total + '</strong> 个问题';
+    html += ' (耗时: ' + data.duration + '秒)</div>';
+
+    // 统计
+    html += '<div class="mb-3">';
+    html += '<span class="badge bg-secondary me-1">Info: ' + data.info + '</span>';
+    html += '<span class="badge bg-success me-1">Low: ' + data.low + '</span>';
+    html += '<span class="badge bg-warning me-1">Medium: ' + data.medium + '</span>';
+    html += '<span class="badge bg-danger">High: ' + data.high + '</span>';
+    html += '</div>';
+
+    // 详细列表
+    html += '<div class="list-group">';
+    data.vulnerabilities.forEach((vuln, index) => {
+        html += '<div class="list-group-item">';
+        html += '<div class="d-flex justify-content-between">';
+        html += '<strong>' + vuln.name + '</strong>';
+        html += '<span class="status-badge risk-' + vuln.severity + '">' + vuln.severity + '</span>';
+        html += '</div>';
+        html += '<p class="mb-1 mt-2"><small>' + vuln.description + '</small></p>';
+        if (vuln.url) {
+            html += '<small><a href="' + vuln.url + '" target="_blank">参考信息</a></small>';
+        }
+        html += '</div>';
+    });
+    html += '</div>';
+
+    resultDiv.innerHTML = html;
+}
+</script>
+{% endblock %}

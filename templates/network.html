@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}网络发现 - 边缘安全审计工具{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2>网络发现</h2>
+        </div>
+    </div>
+
+    <!-- 扫描配置 -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">扫描设置</div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <label>网段</label>
+                            <input type="text" class="form-control" id="networkInput"
+                                   placeholder="192.168.1.0/24" value="192.168.1.0/24">
+                        </div>
+                        <div class="col-md-3">
+                            <label>端口数</label>
+                            <select class="form-select" id="portsInput">
+                                <option value="50">快速 (50端口)</option>
+                                <option value="100" selected>标准 (100端口)</option>
+                                <option value="200">深度 (200端口)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-primary w-100" onclick="startScan()">开始扫描</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 扫描结果 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    扫描结果
+                    <span id="hostCount" class="badge bg-primary float-end">{{ hosts|length }} 台主机</span>
+                </div>
+                <div class="card-body">
+                    <div id="scanStatus" style="display:none;" class="alert alert-info mb-3">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        正在扫描，请稍候...
+                    </div>
+
+                    {% if hosts %}
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th>IP地址</th>
+                                    <th>MAC地址</th>
+                                    <th>主机名</th>
+                                    <th>厂商</th>
+                                    <th>状态</th>
+                                    <th>开放端口</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hostsTable">
+                                {% for host in hosts %}
+                                <tr>
+                                    <td><code>{{ host[0] }}</code></td>
+                                    <td>{{ host[1] or '-' }}</td>
+                                    <td>{{ host[2] or '-' }}</td>
+                                    <td>{{ host[3] or '-' }}</td>
+                                    <td>
+                                        <span class="status-badge status-{{ host[4] }}">{{ host[4] }}</span>
+                                    </td>
+                                    <td>
+                                        {% set port_list = host[5].split(',') if host[5] else [] %}
+                                        {% if port_list and port_list[0] %}
+                                            <small>{{ port_list|length }} 个端口</small>
+                                        {% else %}
+                                            <small>-</small>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center py-4">
+                        暂无数据，请点击"开始扫描"进行网络发现
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startScan() {
+    const network = document.getElementById('networkInput').value;
+    const topPorts = document.getElementById('portsInput').value;
+
+    if (!network) {
+        alert('请输入网段');
+        return;
+    }
+
+    const statusDiv = document.getElementById('scanStatus');
+    statusDiv.style.display = 'block';
+
+    fetch('/api/scan/network', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({network: network, top_ports: parseInt(topPorts)})
+    })
+    .then(r => r.json())
+    .then(data => {
+        statusDiv.style.display = 'none';
+
+        if (data.success) {
+            alert(data.message);
+            location.reload();
+        } else {
+            alert('扫描失败: ' + data.message);
+        }
+    })
+    .catch(err => {
+        statusDiv.style.display = 'none';
+        alert('请求失败: ' + err);
+    });
+}
+</script>
+{% endblock %}

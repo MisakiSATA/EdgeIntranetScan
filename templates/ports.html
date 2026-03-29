@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}端口扫描 - 边缘安全审计工具{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2>端口扫描</h2>
+        </div>
+    </div>
+
+    <!-- 扫描配置 -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">扫描设置</div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <label>目标IP</label>
+                            <input type="text" class="form-control" id="targetInput"
+                                   placeholder="192.168.1.1" value="127.0.0.1">
+                        </div>
+                        <div class="col-md-4">
+                            <label>端口范围</label>
+                            <select class="form-select" id="portsInput">
+                                <option value="1-100">常用 (1-100)</option>
+                                <option value="1-1000" selected>Top 1000</option>
+                                <option value="1-65535">全端口</option>
+                                <option value="22,80,443,8080">常用端口</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-primary w-100" onclick="startScan()">开始扫描</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 扫描结果 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">扫描结果</div>
+                <div class="card-body">
+                    <!-- 扫描状态 -->
+                    <div id="scanStatus" style="display:none;" class="alert alert-info mb-3">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        正在扫描，请稍候...
+                    </div>
+
+                    <!-- 结果显示 -->
+                    <div id="scanResult">
+                        <p class="text-muted text-center py-4">
+                            请输入目标并点击"开始扫描"
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function startScan() {
+    const target = document.getElementById('targetInput').value.trim();
+    const ports = document.getElementById('portsInput').value;
+
+    if (!target) {
+        alert('请输入目标IP');
+        return;
+    }
+
+    const statusDiv = document.getElementById('scanStatus');
+    const resultDiv = document.getElementById('scanResult');
+
+    statusDiv.style.display = 'block';
+    resultDiv.innerHTML = '';
+
+    fetch('/api/scan/ports', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target: target, ports: ports})
+    })
+    .then(r => r.json())
+    .then(data => {
+        statusDiv.style.display = 'none';
+
+        if (data.success) {
+            displayResult(data.data);
+        } else {
+            resultDiv.innerHTML = '<div class="alert alert-danger">' + data.message + '</div>';
+        }
+    })
+    .catch(err => {
+        statusDiv.style.display = 'none';
+        resultDiv.innerHTML = '<div class="alert alert-danger">请求失败: ' + err + '</div>';
+    });
+}
+
+function displayResult(data) {
+    const resultDiv = document.getElementById('scanResult');
+
+    if (!data.ports || data.ports.length === 0) {
+        resultDiv.innerHTML = '<div class="alert alert-warning">未发现开放端口</div>';
+        return;
+    }
+
+    let html = '<div class="alert alert-success">';
+    html += '扫描完成，发现 <strong>' + data.total + '</strong> 个开放端口';
+    html += ' (耗时: ' + data.duration + '秒)</div>';
+
+    html += '<div class="table-responsive">';
+    html += '<table class="table table-sm table-hover">';
+    html += '<thead><tr><th>端口</th><th>协议</th><th>状态</th><th>服务</th><th>版本</th><th>风险</th></tr></thead>';
+    html += '<tbody>';
+
+    data.ports.forEach(port => {
+        html += '<tr>';
+        html += '<td><code>' + port.port + '</code></td>';
+        html += '<td>' + port.protocol + '</td>';
+        html += '<td><span class="status-badge status-up">' + port.state + '</span></td>';
+        html += '<td>' + (port.service || '-') + '</td>';
+        html += '<td><small>' + (port.version || '-') + '</small></td>';
+        html += '<td><span class="status-badge risk-' + port.risk + '">' + port.risk + '</span></td>';
+        html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    resultDiv.innerHTML = html;
+}
+</script>
+{% endblock %}

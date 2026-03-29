@@ -1,0 +1,33 @@
+@font-face {
+  font-family: "bootstrap-icons";
+  src: url("data:font/woff2;base64,d09GMgABAAAAAExkAA4AAAAAGpQAAEczAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGhYbEBwqBmAAgTIIDAqBbIE8F6bQZLXLfYAATYCJANuC9IANNYEABNgIkA24L0gA01gQAE2AiQDbgvSADSWBAATYCJANuCyjZGhUeHj5mPZnMxMzO3M7M7M3uzXL/VfnNryf3llw8b0w8b0w6xT3c8B+i4BdAE0A0QBtAGsAjQCNgFQAACBkgEIAAFSAlAAABJQAiAAAA4IABAAAAAAABAAQAAAAAAAl4AAAAQAAAAEAAAAA") format("woff2");
+}
+.bi {
+  display: inline-block;
+  font-size: 1rem;
+  line-height: 1;
+}
+.bi::before {
+  display: inline-block;
+  font-family: "bootstrap-icons";
+  font-style: normal;
+  font-weight: 400;
+  font-variant: normal;
+  text-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+  content: "";
+}
+.bi-shield-check::before { content: "\F52F"; }
+.bi-speedometer2::before { content: "\F5B1"; }
+.bi-router::before { content: "\F565"; }
+.bi-hdd-network::before { content: "\F5BF"; }
+.bi-bug::before { content: "\F5E0"; }
+.bi-activity::before { content: "\F5E2"; }
+.bi-file-earmark-text::before { content: "\F5E7"; }
+.bi-lightning::before { content: "\F5F8"; }
+.bi-search::before { content: "\F5F9"; }
+.bi-gear::before { content: "\F5FA"; }
+.bi-check-circle::before { content: "\F5FC"; }
+.bi-clock::before { content: "\F5FD"; }
+.bi-code::before { content: "\F5FE"; }
+/* 添加更多图标 */

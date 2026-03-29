@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}首页 - 边缘安全审计工具{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2>仪表板</h2>
+            <p class="text-muted">边缘网络安全审计概览</p>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-primary">{{ host_count }}</h3>
+                    <p class="mb-0">已发现主机</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-success">3</h3>
+                    <p class="mb-0">扫描功能</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-info">{{ version }}</h3>
+                    <p class="mb-0">当前版本</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 快速操作 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">快速操作</div>
+                <div class="card-body">
+                    <a href="/network" class="btn btn-primary me-2">网络发现</a>
+                    <a href="/ports" class="btn btn-success me-2">端口扫描</a>
+                    <a href="/vulns" class="btn btn-warning">漏洞扫描</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 最近发现的主机 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">最近发现的主机</div>
+                <div class="card-body">
+                    {% if recent_hosts %}
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>IP地址</th>
+                                    <th>MAC地址</th>
+                                    <th>主机名</th>
+                                    <th>厂商</th>
+                                    <th>状态</th>
+                                    <th>最后发现</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for host in recent_hosts %}
+                                <tr>
+                                    <td><code>{{ host[0] }}</code></td>
+                                    <td>{{ host[1] or '-' }}</td>
+                                    <td>{{ host[2] or '-' }}</td>
+                                    <td>{{ host[3] or '-' }}</td>
+                                    <td>
+                                        <span class="status-badge status-{{ host[4] }}">{{ host[4] }}</span>
+                                    </td>
+                                    <td><small>{{ host[6] }}</small></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">暂无数据，请先进行<a href="/network">网络发现</a></p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
