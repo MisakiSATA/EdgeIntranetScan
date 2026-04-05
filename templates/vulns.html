@@ -60,6 +60,13 @@
 
 {% block scripts %}
 <script>
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 function startScan() {
     const target = document.getElementById('targetInput').value.trim();
 
@@ -120,12 +127,12 @@ function displayResult(data) {
     data.vulnerabilities.forEach((vuln, index) => {
         html += '<div class="list-group-item">';
         html += '<div class="d-flex justify-content-between">';
-        html += '<strong>' + vuln.name + '</strong>';
-        html += '<span class="status-badge risk-' + vuln.severity + '">' + vuln.severity + '</span>';
+        html += '<strong>' + escapeHtml(vuln.name) + '</strong>';
+        html += '<span class="status-badge risk-' + escapeHtml(vuln.severity) + '">' + escapeHtml(vuln.severity) + '</span>';
         html += '</div>';
-        html += '<p class="mb-1 mt-2"><small>' + vuln.description + '</small></p>';
+        html += '<p class="mb-1 mt-2"><small>' + escapeHtml(vuln.description) + '</small></p>';
         if (vuln.url) {
-            html += '<small><a href="' + vuln.url + '" target="_blank">参考信息</a></small>';
+            html += '<small><a href="' + escapeHtml(vuln.url) + '" target="_blank" rel="noopener">参考信息</a></small>';
         }
         html += '</div>';
     });

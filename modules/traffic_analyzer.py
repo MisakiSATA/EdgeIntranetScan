@@ -92,7 +92,7 @@ class TrafficAnalyzer:
         self,
         duration: int = 60,
         packet_count: int = 10000,
-        filter: Optional[str] = None
+        bpf_filter: Optional[str] = None
     ) -> str:
         """
         开始抓包
@@ -100,7 +100,7 @@ class TrafficAnalyzer:
         Args:
             duration: 抓包持续时间（秒），0 表示不限时
             packet_count: 最大抓包数量
-            filter: BPF 过滤表达式
+            bpf_filter: BPF 过滤表达式
 
         Returns:
             抓包文件路径
@@ -122,8 +122,8 @@ class TrafficAnalyzer:
         ]
 
         # 添加过滤规则
-        if filter:
-            cmd.extend(filter.split())
+        if bpf_filter:
+            cmd.extend(bpf_filter.split())
 
         logger.info(f"开始抓包: 接口={self.interface}, 文件={capture_file}")
         logger.debug(f"执行命令: {' '.join(cmd)}")
@@ -395,18 +395,18 @@ class TrafficAnalyzer:
             top_ports=[]
         )
 
-    def export_report(self, stats: TrafficStats, format: str = "text") -> str:
+    def export_report(self, stats: TrafficStats, report_format: str = "text") -> str:
         """
         导出流量分析报告
 
         Args:
             stats: 流量统计数据
-            format: 报告格式 (text, json)
+            report_format: 报告格式 (text, json)
 
         Returns:
             报告内容
         """
-        if format == "json":
+        if report_format == "json":
             return json.dumps(stats.to_dict(), indent=2, ensure_ascii=False)
 
         # 文本格式报告

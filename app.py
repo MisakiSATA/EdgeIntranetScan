@@ -6,6 +6,7 @@
 
 import os
 import sys
+import re
 import sqlite3
 import logging
 from datetime import datetime
@@ -130,19 +131,19 @@ def network():
     hosts = conn.execute('SELECT * FROM hosts ORDER BY ip').fetchall()
     conn.close()
 
-    return render_template('network.html', hosts=hosts)
+    return render_template('network.html', hosts=hosts, version=VERSION)
 
 
 @app.route('/ports')
 def ports():
     """端口扫描页面"""
-    return render_template('ports.html')
+    return render_template('ports.html', version=VERSION)
 
 
 @app.route('/vulns')
 def vulns():
     """漏洞扫描页面"""
-    return render_template('vulns.html')
+    return render_template('vulns.html', version=VERSION)
 
 
 @app.route('/traffic')
@@ -153,7 +154,7 @@ def traffic():
         'SELECT * FROM traffic_stats ORDER BY scan_time DESC LIMIT 20'
     ).fetchall()
     conn.close()
-    return render_template('traffic.html', stats=stats)
+    return render_template('traffic.html', stats=stats, version=VERSION)
 
 
 @app.route('/report')
@@ -179,7 +180,8 @@ def report():
     return render_template('report.html',
                           host_count=host_count,
                           recent_hosts=recent_hosts,
-                          scan_history=scan_history)
+                          scan_history=scan_history,
+                          version=VERSION)
 
 
 # ============================================================================
@@ -192,6 +194,13 @@ def api_scan_network():
     data = request.json
     network = data.get('network', '192.168.1.0/24')
     top_ports = data.get('top_ports', 100)
+
+    # 验证网段格式
+    if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$', network):
+        return jsonify({
+            'success': False,
+            'message': '无效的网段格式，例如 192.168.1.0/24'
+        }), 400
 
     try:
         discovery = NetworkDiscovery(network=network)
@@ -222,6 +231,13 @@ def api_scan_ports():
         return jsonify({
             'success': False,
             'message': '请指定目标'
+        }), 400
+
+    # 验证目标格式（IP地址或域名）
+    if not re.match(r'^[\d.a-zA-Z-]+$', target):
+        return jsonify({
+            'success': False,
+            'message': '无效的目标地址'
         }), 400
 
     try:
@@ -310,8 +326,8 @@ def api_system_interfaces():
         for iface in netifaces.interfaces():
             if iface != 'lo':
                 interfaces.append(iface)
-    except:
-        # 默认接口
+    except ImportError:
+        # netifaces未安装，返回默认接口
         interfaces = ['eth0', 'wlan0', 'end0']
 
     return jsonify({
@@ -326,6 +342,20 @@ def api_traffic_capture():
     data = request.json
     interface = data.get('interface', 'eth0')
     duration = data.get('duration', 60)
+
+    # 验证接口名称（仅允许字母数字和连字符/下划线，防止命令注入）
+    if not re.match(r'^[a-zA-Z0-9._-]+$', interface):
+        return jsonify({
+            'success': False,
+            'message': '无效的网络接口名称'
+        }), 400
+
+    # 验证捕获时长
+    if not isinstance(duration, int) or duration < 10 or duration > 600:
+        return jsonify({
+            'success': False,
+            'message': '捕获时长必须在10-600秒之间'
+        }), 400
 
     # 检查是否有tcpdump
     import shutil
@@ -411,12 +441,13 @@ def analyze_pcap(pcap_file, interface, duration):
         lines = result.stdout.strip().split('\n')
         stats['packets'] = len([l for l in lines if l])
 
-        # 简单统计
+        # 统计
         from collections import Counter
         import re
 
         ips = []
         ports = []
+        protocols = Counter()
 
         for line in lines:
             # 提取IP
@@ -427,10 +458,24 @@ def analyze_pcap(pcap_file, interface, duration):
             port_match = re.findall(r'\.(\d+)\s', line)
             ports.extend([int(p) for p in port_match if p.isdigit()])
 
+            # 分析协议类型
+            if ' TCP ' in line or line.strip().endswith(' Flags'):
+                protocols['TCP'] += 1
+            elif ' UDP ' in line:
+                protocols['UDP'] += 1
+            elif ' ICMP ' in line:
+                protocols['ICMP'] += 1
+            elif ' ARP ' in line:
+                protocols['ARP'] += 1
+            elif ' DNS' in line:
+                protocols['DNS'] += 1
+            else:
+                protocols['Other'] += 1
+
         stats['top_hosts'] = dict(Counter(ips).most_common(10))
         stats['top_ports'] = dict(Counter(ports).most_common(10))
         stats['bytes'] = stats['packets'] * 1500  # 估算
-        stats['protocols'] = {'TCP': 50, 'UDP': 30, 'ICMP': 10, 'Other': 10}  # 简化
+        stats['protocols'] = dict(protocols) if protocols else {'Other': 0}
 
     except Exception as e:
         logger.error(f"分析pcap失败: {e}")
@@ -445,65 +490,62 @@ def api_report_generate():
     report_type = data.get('type', 'summary')
 
     conn = get_db()
+    try:
+        if report_type == 'summary':
+            # 摘要报告
+            host_count = conn.execute('SELECT COUNT(*) FROM hosts').fetchone()[0]
 
-    if report_type == 'summary':
-        # 摘要报告
-        host_count = conn.execute('SELECT COUNT(*) FROM hosts').fetchone()[0]
+            # 漏洞统计（从扫描历史中提取）
+            vuln_stats = [
+                {'severity': 'critical', 'count': 0},
+                {'severity': 'high', 'count': 0},
+                {'severity': 'medium', 'count': 0},
+                {'severity': 'low', 'count': 0},
+                {'severity': 'info', 'count': 0}
+            ]
 
-        # 漏洞统计（从扫描历史中提取）
-        vuln_stats = [
-            {'severity': 'critical', 'count': 0},
-            {'severity': 'high', 'count': 0},
-            {'severity': 'medium', 'count': 0},
-            {'severity': 'low', 'count': 0},
-            {'severity': 'info', 'count': 0}
-        ]
+            return jsonify({
+                'success': True,
+                'data': {
+                    'host_count': host_count,
+                    'vuln_stats': vuln_stats,
+                    'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+            })
 
+        elif report_type == 'full':
+            # 完整报告
+            hosts = conn.execute('SELECT * FROM hosts ORDER BY ip').fetchall()
+            scan_history = conn.execute(
+                'SELECT * FROM scan_history ORDER BY scan_time DESC LIMIT 50'
+            ).fetchall()
+
+            # 统计厂商分布
+            vendors = conn.execute(
+                'SELECT vendor, COUNT(*) as count FROM hosts GROUP BY vendor ORDER BY count DESC'
+            ).fetchall()
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'summary': {
+                        'total_hosts': len(hosts),
+                        'total_scans': len(scan_history),
+                        'vendors': [dict(v) for v in vendors]
+                    },
+                    'hosts': [dict(h) for h in hosts],
+                    'scan_history': [dict(h) for h in scan_history],
+                    'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+            })
+
+        else:
+            return jsonify({
+                'success': False,
+                'message': '未知的报告类型'
+            })
+    finally:
         conn.close()
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'host_count': host_count,
-                'vuln_stats': vuln_stats,
-                'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        })
-
-    elif report_type == 'full':
-        # 完整报告
-        hosts = conn.execute('SELECT * FROM hosts ORDER BY ip').fetchall()
-        scan_history = conn.execute(
-            'SELECT * FROM scan_history ORDER BY scan_time DESC LIMIT 50'
-        ).fetchall()
-
-        # 统计厂商分布
-        vendors = conn.execute(
-            'SELECT vendor, COUNT(*) as count FROM hosts GROUP BY vendor ORDER BY count DESC'
-        ).fetchall()
-
-        conn.close()
-
-        return jsonify({
-            'success': True,
-            'data': {
-                'summary': {
-                    'total_hosts': len(hosts),
-                    'total_scans': len(scan_history),
-                    'vendors': [dict(v) for v in vendors]
-                },
-                'hosts': [dict(h) for h in hosts],
-                'scan_history': [dict(h) for h in scan_history],
-                'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-        })
-
-    else:
-        conn.close()
-        return jsonify({
-            'success': False,
-            'message': '未知的报告类型'
-        })
 
 
 # ============================================================================

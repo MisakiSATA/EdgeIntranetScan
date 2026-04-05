@@ -68,6 +68,13 @@
 
 {% block scripts %}
 <script>
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 let currentReport = null;
 
 function generateReport(type) {
@@ -140,12 +147,12 @@ function displayReport(data, type) {
 
             data.hosts.forEach(host => {
                 html += `<tr>
-                    <td>${host.ip || '-'}</td>
-                    <td>${host.mac || '-'}</td>
-                    <td>${host.vendor || '-'}</td>
-                    <td>${host.status || '-'}</td>
-                    <td>${host.ports || '-'}</td>
-                    <td>${host.last_seen || '-'}</td>
+                    <td>${escapeHtml(host.ip) || '-'}</td>
+                    <td>${escapeHtml(host.mac) || '-'}</td>
+                    <td>${escapeHtml(host.vendor) || '-'}</td>
+                    <td>${escapeHtml(host.status) || '-'}</td>
+                    <td>${escapeHtml(host.ports) || '-'}</td>
+                    <td>${escapeHtml(host.last_seen) || '-'}</td>
                 </tr>`;
             });
 
@@ -162,10 +169,10 @@ function displayReport(data, type) {
 
             data.scan_history.forEach(scan => {
                 html += `<tr>
-                    <td>${scan.scan_time || '-'}</td>
-                    <td>${scan.scan_type || '-'}</td>
-                    <td>${scan.target || '-'}</td>
-                    <td class="small">${scan.result || '-'}</td>
+                    <td>${escapeHtml(scan.scan_time) || '-'}</td>
+                    <td>${escapeHtml(scan.scan_type) || '-'}</td>
+                    <td>${escapeHtml(scan.target) || '-'}</td>
+                    <td class="small">${escapeHtml(scan.result) || '-'}</td>
                 </tr>`;
             });
 

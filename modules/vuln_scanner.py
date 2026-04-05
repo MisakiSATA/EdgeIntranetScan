@@ -1,25 +1,48 @@
 # -*- coding: utf-8 -*-
 """
 漏洞扫描模块
-基础HTTP安全检查 + 常见漏洞检测
+集成 nuclei 进行漏洞检测 + HTTP 安全头部检查
 """
 
+import subprocess
+import shutil
+import json
 import logging
 import requests
 import re
 from typing import Dict, List
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class VulnerabilityScanner:
-    """漏洞扫描器"""
+    """漏洞扫描器 - 集成 nuclei"""
+
+    def __init__(self, nuclei_path: str = "nuclei"):
+        """
+        初始化漏洞扫描器
+
+        Args:
+            nuclei_path: nuclei 可执行文件路径
+        """
+        self.nuclei_path = nuclei_path
+        self._nuclei_available = shutil.which(nuclei_path) is not None
+
+        if not self._nuclei_available:
+            logger.warning("nuclei 未找到，漏洞扫描将仅执行 HTTP 安全头检查")
 
     def scan(self, target: str) -> Dict:
-        """扫描目标漏洞"""
+        """
+        扫描目标漏洞
+
+        Args:
+            target: 目标URL或IP
+
+        Returns:
+            扫描结果字典
+        """
         logger.info(f"开始扫描: {target}")
 
         start_time = datetime.now()
@@ -29,17 +52,20 @@ class VulnerabilityScanner:
         if not target.startswith(('http://', 'https://')):
             target = 'http://' + target
 
-        # 1. 基础HTTP检查
+        # 1. HTTP 安全头检查（始终执行，快速）
         vulns.extend(self._check_http_headers(target))
 
-        # 2. 常见路径检查
-        vulns.extend(self._check_common_paths(target))
-
-        # 3. 注入检测
-        vulns.extend(self._check_injections(target))
-
-        # 4. 信息泄露检测
-        vulns.extend(self._check_info_disclosure(target))
+        # 2. nuclei 漏洞扫描（核心）
+        if self._nuclei_available:
+            vulns.extend(self._scan_with_nuclei(target))
+        else:
+            vulns.append({
+                'name': 'nuclei 未安装',
+                'severity': 'INFO',
+                'description': '未检测到 nuclei，仅执行了 HTTP 安全头检查。'
+                               '请运行: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
+                'url': target
+            })
 
         # 统计
         critical = sum(1 for v in vulns if v['severity'] == 'CRITICAL')
@@ -64,6 +90,115 @@ class VulnerabilityScanner:
             'duration': round(duration, 2),
             'scan_time': start_time.strftime('%Y-%m-%d %H:%M:%S')
         }
+
+    def _scan_with_nuclei(self, target: str) -> List[Dict]:
+        """
+        使用 nuclei 扫描目标漏洞
+
+        Args:
+            target: 目标URL
+
+        Returns:
+            漏洞列表
+        """
+        logger.info(f"使用 nuclei 扫描: {target}")
+        vulns = []
+
+        cmd = [
+            self.nuclei_path,
+            "-u", target,
+            "-json",
+            "-silent",
+            "-no-color",
+            "-timeout", "10",
+            "-retries", "1"
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+
+            # nuclei 的 JSON 输出是每行一个 JSON 对象
+            # 错误信息输出到 stderr
+            if result.stderr:
+                stderr_lower = result.stderr.lower()
+                if 'error' in stderr_lower:
+                    logger.warning(f"nuclei 警告: {result.stderr.strip()[:200]}")
+
+            # 解析 stdout 中的 JSON 行
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+                vuln = self._parse_nuclei_line(line)
+                if vuln:
+                    vulns.append(vuln)
+
+            logger.info(f"nuclei 扫描完成，发现 {len(vulns)} 个漏洞")
+
+        except subprocess.TimeoutExpired:
+            logger.error("nuclei 扫描超时（300秒）")
+        except FileNotFoundError:
+            logger.error("nuclei 未找到")
+            self._nuclei_available = False
+        except Exception as e:
+            logger.error(f"nuclei 扫描失败: {e}")
+
+        return vulns
+
+    def _parse_nuclei_line(self, line: str) -> Dict:
+        """
+        解析 nuclei 单行 JSON 输出
+
+        nuclei 输出格式:
+        {
+            "template-id": "cve-2021-41773",
+            "info": {
+                "name": "Apache Path Traversal",
+                "severity": "high",
+                "description": "...",
+                "tags": ["cve", "apache", "lfi"]
+            },
+            "matched-at": "http://target/cgi-bin/...",
+            "host": "http://target",
+            "type": "http"
+        }
+        """
+        try:
+            data = json.loads(line)
+
+            info = data.get('info', {})
+            name = info.get('name', 'Unknown')
+            severity = info.get('severity', 'info').upper()
+            description = info.get('description', '')
+            matched_at = data.get('matched-at', '')
+            template_id = data.get('template-id', '')
+            tags = info.get('tags', [])
+
+            # 如果没有描述，用 tags 组合一个
+            if not description and tags:
+                description = f"Tags: {', '.join(tags)}"
+
+            # 构建显示名称
+            display_name = name
+            if template_id:
+                display_name = f"[{template_id}] {name}"
+
+            return {
+                'name': display_name,
+                'severity': severity,
+                'description': description[:200] if description else '无详细描述',
+                'url': matched_at or data.get('host', ''),
+                'template_id': template_id,
+                'tags': tags
+            }
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.debug(f"解析 nuclei 输出失败: {e}")
+            return None
 
     def _check_http_headers(self, url: str) -> List[Dict]:
         """检查HTTP安全头部"""
@@ -154,166 +289,13 @@ class VulnerabilityScanner:
 
         return vulns
 
-    def _check_common_paths(self, base_url: str) -> List[Dict]:
-        """检查常见敏感路径"""
-        vulns = []
-
-        # 常见敏感路径
-        sensitive_paths = {
-            '/robots.txt': 'robots.txt文件',
-            '/.git/config': 'Git配置泄露',
-            '/.env': '环境变量文件',
-            '/web.config': 'Web配置文件',
-            '/README.md': 'README文件',
-            '/.DS_Store': 'macOS文件',
-            '/wp-admin/': 'WordPress后台',
-            '/admin': '管理后台',
-            '/phpmyadmin': 'phpMyAdmin',
-            '/.svn/': 'SVN泄露',
-            '/backup.sql': 'SQL备份文件',
-        }
-
-        for path, name in sensitive_paths.items():
-            try:
-                url = urljoin(base_url, path)
-                response = requests.head(
-                    url,
-                    headers={'User-Agent': 'Mozilla/5.0'},
-                    timeout=5,
-                    allow_redirects=False
-                )
-
-                if response.status_code == 200:
-                    vulns.append({
-                        'name': f'敏感文件暴露: {name}',
-                        'severity': 'MEDIUM' if 'admin' in path else 'LOW',
-                        'description': f'{path} 可被访问',
-                        'url': url
-                    })
-            except:
-                pass
-
-        return vulns
-
-    def _check_injections(self, base_url: str) -> List[Dict]:
-        """基础注入检测"""
-        vulns = []
-
-        # 检查常见参数
-        parsed = urlparse(base_url)
-        test_urls = []
-
-        # 如果URL没有参数，添加测试参数
-        if not parsed.query:
-            base = base_url.rstrip('/')
-            test_urls = [
-                f'{base}/?id=1\'',
-                f'{base}/?search=<script>alert(1)</script>',
-                f'{base}/?file=../../../etc/passwd',
-            ]
-        else:
-            # 在现有参数上追加测试
-            sep = '&' if '?' in base_url else '?'
-            test_urls = [
-                f'{base_url}{sep}id=1\'',
-                f'{base_url}{sep}test=<script>alert(1)</script>',
-            ]
-
-        # 测试GET参数注入
-        for test_url in test_urls[:2]:  # 限制测试数量
-            try:
-                response = requests.get(
-                    test_url,
-                    headers={'User-Agent': 'Mozilla/5.0'},
-                    timeout=5
-                )
-
-                content = response.text.lower()
-
-                # SQL错误检测
-                sql_errors = ['mysql_fetch', 'ora-', 'postgresql', 'you have an error in your sql syntax', 'warning: mysql']
-                for error in sql_errors:
-                    if error in content:
-                        vulns.append({
-                            'name': '可能的SQL注入',
-                            'severity': 'HIGH',
-                            'description': f'检测到SQL错误信息',
-                            'url': test_url[:100]
-                        })
-                        break
-
-                # XSS检测
-                if '<script>alert(1)</script>' in content or 'alert(1)' in content:
-                    vulns.append({
-                        'name': '可能的XSS漏洞',
-                        'severity': 'MEDIUM',
-                        'description': '反射型XSS',
-                        'url': test_url[:100]
-                    })
-
-            except:
-                pass
-
-        return vulns
-
-    def _check_info_disclosure(self, url: str) -> List[Dict]:
-        """信息泄露检测"""
-        vulns = []
-
-        try:
-            response = requests.get(
-                url,
-                headers={'User-Agent': 'Mozilla/5.0'},
-                timeout=10
-            )
-
-            content = response.text
-
-            # 检查注释中的敏感信息
-            comments = re.findall(r'<!--.*?-->', content, re.DOTALL)
-            for comment in comments:
-                comment_lower = comment.lower()
-                if any(word in comment_lower for word in ['password', 'api_key', 'secret', 'token', 'key']):
-                    vulns.append({
-                        'name': '注释中的敏感信息',
-                        'severity': 'INFO',
-                        'description': 'HTML注释可能包含敏感信息',
-                        'url': url
-                    })
-                    break
-
-            # 检查版本信息
-            version_patterns = [
-                r'jquery-[0-9.]+\.js',
-                r'bootstrap-[0-9.]+\.js',
-                r'vue-[0-9.]+\.js',
-                r'react-[0-9.]+\.js',
-            ]
-
-            for pattern in version_patterns:
-                if re.search(pattern, content, re.IGNORECASE):
-                    vulns.append({
-                        'name': 'JavaScript库版本暴露',
-                        'severity': 'INFO',
-                        'description': f'检测到可识别的库版本',
-                        'url': url
-                    })
-                    break
-
-        except:
-            pass
-
-        return vulns
-
 
 # 测试
 if __name__ == "__main__":
-    import json
     scanner = VulnerabilityScanner()
 
     targets = [
         "http://testphp.vulnweb.com",
-        "http://192.168.1.1"
     ]
 
     for target in targets:
@@ -321,6 +303,6 @@ if __name__ == "__main__":
         print(f"扫描: {target}")
         print('='*50)
         result = scanner.scan(target)
-        print(f"发现 {result['total']} 个问题")
+        print(f"发现 {result['total']} 个问题 (nuclei 可用: {scanner._nuclei_available})")
         for v in result['vulnerabilities']:
-            print(f"  [{v['severity']}] {v['name']}: {v['description'][:50]}")
+            print(f"  [{v['severity']}] {v['name']}: {v['description'][:80]}")

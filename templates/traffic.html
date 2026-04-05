@@ -26,7 +26,7 @@
                         <label class="form-label">捕获时长（秒）</label>
                         <input type="number" class="form-control" id="durationInput" value="60" min="10" max="600">
                     </div>
-                    <button type="button" class="btn btn-primary w-100" onclick="startCapture()">
+                    <button type="button" class="btn btn-primary w-100" onclick="startCapture(this)">
                         <i class="bi bi-record-circle"></i> 开始捕获
                     </button>
                 </form>
@@ -113,13 +113,12 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
-function startCapture() {
+function startCapture(btn) {
     const iface = document.getElementById('interfaceSelect').value;
     const duration = parseInt(document.getElementById('durationInput').value);
 
     if (!confirm(`确定要在 ${iface} 接口上捕获 ${duration} 秒的流量吗？`)) return;
 
-    const btn = event.target;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 捕获中...';
 

@@ -219,7 +219,7 @@ class NetworkDiscovery:
         try:
             hostname = socket.gethostbyaddr(ip)[0]
             return hostname
-        except:
+        except (socket.herror, socket.gaierror, socket.timeout, OSError):
             return ""
 
     def _get_vendor(self, mac: str) -> str:
