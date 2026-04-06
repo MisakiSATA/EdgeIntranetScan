@@ -20,12 +20,14 @@
                         <div class="col-md-8">
                             <label>目标URL/IP</label>
                             <input type="text" class="form-control" id="targetInput"
-                                   placeholder="http://192.168.1.1 或 192.168.1.1" value="127.0.0.1">
-                            <small class="text-muted">支持URL或IP地址</small>
+                                   placeholder="http://192.168.1.1 或 192.168.1.1" value="">
+                            <small class="text-muted">支持URL或IP地址（如 http://192.168.1.1:8080）</small>
                         </div>
                         <div class="col-md-4">
                             <label>&nbsp;</label>
-                            <button class="btn btn-primary w-100" onclick="startScan()">开始扫描</button>
+                            <button class="btn btn-primary w-100" id="scanBtn" onclick="startScan()">
+                                开始扫描
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -41,8 +43,21 @@
                 <div class="card-body">
                     <!-- 扫描状态 -->
                     <div id="scanStatus" style="display:none;" class="alert alert-info mb-3">
-                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                        正在扫描，请稍候...
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                            <span id="scanProgressText">正在扫描，请稍候...</span>
+                        </div>
+                        <div class="progress mt-2" style="display:none;" id="scanProgressBar">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 100%"></div>
+                        </div>
+                    </div>
+
+                    <!-- nuclei 状态信息 -->
+                    <div id="nucleiInfo" style="display:none;" class="alert alert-secondary mb-3">
+                        <small>
+                            <strong>nuclei 状态:</strong>
+                            <span id="nucleiStatusText">检测中...</span>
+                        </small>
                     </div>
 
                     <!-- 结果显示 -->
@@ -67,6 +82,8 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+let pollTimer = null;
+
 function startScan() {
     const target = document.getElementById('targetInput').value.trim();
 
@@ -75,11 +92,20 @@ function startScan() {
         return;
     }
 
+    const btn = document.getElementById('scanBtn');
     const statusDiv = document.getElementById('scanStatus');
+    const progressDiv = document.getElementById('scanProgressBar');
+    const progressText = document.getElementById('scanProgressText');
     const resultDiv = document.getElementById('scanResult');
+    const nucleiInfoDiv = document.getElementById('nucleiInfo');
 
+    // 显示扫描状态
     statusDiv.style.display = 'block';
+    progressDiv.style.display = 'block';
+    nucleiInfoDiv.style.display = 'none';
     resultDiv.innerHTML = '';
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 扫描中...';
 
     fetch('/api/scan/vulns', {
         method: 'POST',
@@ -88,18 +114,71 @@ function startScan() {
     })
     .then(r => r.json())
     .then(data => {
-        statusDiv.style.display = 'none';
-
         if (data.success) {
-            displayResult(data.data);
+            // 开始轮询扫描状态
+            progressText.textContent = 'nuclei 正在扫描，请耐心等待（可能需要1-3分钟）...';
+            pollScanStatus();
         } else {
-            resultDiv.innerHTML = '<div class="alert alert-danger">' + data.message + '</div>';
+            statusDiv.style.display = 'none';
+            progressDiv.style.display = 'none';
+            nucleiInfoDiv.style.display = 'none';
+            resultDiv.innerHTML = '<div class="alert alert-danger">' + escapeHtml(data.message) + '</div>';
+            btn.disabled = false;
+            btn.innerHTML = '开始扫描';
         }
     })
     .catch(err => {
         statusDiv.style.display = 'none';
-        resultDiv.innerHTML = '<div class="alert alert-danger">请求失败: ' + err + '</div>';
+        progressDiv.style.display = 'none';
+        resultDiv.innerHTML = '<div class="alert alert-danger">请求失败: ' + escapeHtml(String(err)) + '</div>';
+        btn.disabled = false;
+        btn.innerHTML = '开始扫描';
     });
+}
+
+function pollScanStatus() {
+    if (pollTimer) clearInterval(pollTimer);
+
+    pollTimer = setInterval(function() {
+        fetch('/api/scan/vulns/status')
+        .then(r => r.json())
+        .then(status => {
+            if (!status.scanning && status.result) {
+                // 扫描完成
+                clearInterval(pollTimer);
+                pollTimer = null;
+                document.getElementById('scanStatus').style.display = 'none';
+                document.getElementById('scanProgressBar').style.display = 'none';
+
+                const data = status.result;
+                const nucleiInfoDiv = document.getElementById('nucleiInfo');
+                nucleiInfoDiv.style.display = 'block';
+
+                let infoText = `nuclei 版本: ${data.nuclei_version || '未知'}`;
+                infoText += ` | 模板数: ${data.templates_count || 0}`;
+                nucleiInfoDiv.querySelector('#nucleiStatusText').textContent = infoText;
+
+                displayResult(data);
+
+                const btn = document.getElementById('scanBtn');
+                btn.disabled = false;
+                btn.innerHTML = '开始扫描';
+            } else if (!status.scanning && status.error) {
+                // 扫描出错
+                clearInterval(pollTimer);
+                pollTimer = null;
+                document.getElementById('scanStatus').style.display = 'none';
+                document.getElementById('scanProgressBar').style.display = 'none';
+                document.getElementById('scanResult').innerHTML =
+                    '<div class="alert alert-danger">扫描失败: ' + escapeHtml(status.error) + '</div>';
+
+                const btn = document.getElementById('scanBtn');
+                btn.disabled = false;
+                btn.innerHTML = '开始扫描';
+            }
+            // scanning === true 时继续轮询
+        });
+    }, 2000); // 每2秒查询一次
 }
 
 function displayResult(data) {
@@ -116,15 +195,16 @@ function displayResult(data) {
 
     // 统计
     html += '<div class="mb-3">';
-    html += '<span class="badge bg-secondary me-1">Info: ' + data.info + '</span>';
-    html += '<span class="badge bg-success me-1">Low: ' + data.low + '</span>';
-    html += '<span class="badge bg-warning me-1">Medium: ' + data.medium + '</span>';
-    html += '<span class="badge bg-danger">High: ' + data.high + '</span>';
+    if (data.critical > 0) html += '<span class="badge bg-danger me-1">Critical: ' + data.critical + '</span>';
+    if (data.high > 0) html += '<span class="badge bg-danger me-1">High: ' + data.high + '</span>';
+    if (data.medium > 0) html += '<span class="badge bg-warning me-1">Medium: ' + data.medium + '</span>';
+    if (data.low > 0) html += '<span class="badge bg-success me-1">Low: ' + data.low + '</span>';
+    if (data.info > 0) html += '<span class="badge bg-secondary me-1">Info: ' + data.info + '</span>';
     html += '</div>';
 
     // 详细列表
     html += '<div class="list-group">';
-    data.vulnerabilities.forEach((vuln, index) => {
+    data.vulnerabilities.forEach(function(vuln) {
         html += '<div class="list-group-item">';
         html += '<div class="d-flex justify-content-between">';
         html += '<strong>' + escapeHtml(vuln.name) + '</strong>';

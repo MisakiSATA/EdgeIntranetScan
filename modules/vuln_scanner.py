@@ -6,15 +6,21 @@
 
 import subprocess
 import shutil
+import os
 import json
 import logging
 import requests
-import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# nuclei 模板默认存储路径
+DEFAULT_NUCLEI_TEMPLATES_PATH = os.path.expanduser(
+    '~/.config/nuclei/templates'
+)
 
 
 class VulnerabilityScanner:
@@ -22,16 +28,98 @@ class VulnerabilityScanner:
 
     def __init__(self, nuclei_path: str = "nuclei"):
         """
-        初始化漏洞扫描器
+        初始化漏洞扫描器，自动检测 nuclei 可用性
 
         Args:
             nuclei_path: nuclei 可执行文件路径
         """
         self.nuclei_path = nuclei_path
-        self._nuclei_available = shutil.which(nuclei_path) is not None
+        self._nuclei_available = False
+        self._nuclei_version = ""
+        self._templates_count = 0
 
-        if not self._nuclei_available:
+        # 1. 查找 nuclei 可执行文件
+        found_path = self._find_nuclei(nuclei_path)
+        if found_path:
+            self.nuclei_path = found_path
+            self._nuclei_available = True
+            logger.info(f"nuclei 找到: {found_path}")
+
+            # 2. 获取 nuclei 版本（仅信息展示，不影响可用性）
+            self._nuclei_version = self._get_nuclei_version()
+            if self._nuclei_version:
+                logger.info(f"nuclei 版本: {self._nuclei_version}")
+            else:
+                logger.warning("无法获取 nuclei 版本（不影响扫描功能）")
+
+            # 3. 检查模板数量（这才是判断 nuclei 是否可用的关键）
+            self._templates_count = self._count_templates()
+            if self._templates_count > 0:
+                logger.info(f"nuclei 模板数量: {self._templates_count}")
+                self._nuclei_available = True
+            else:
+                logger.warning("nuclei 模板数量为 0，请运行 nuclei -ut 更新模板")
+                self._nuclei_available = False
+        else:
             logger.warning("nuclei 未找到，漏洞扫描将仅执行 HTTP 安全头检查")
+            logger.warning("安装方法: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest")
+
+    def _find_nuclei(self, nuclei_path: str) -> Optional[str]:
+        """
+        查找 nuclei 可执行文件
+
+        搜索顺序:
+        1. 用户指定的路径
+        2. 系统 PATH
+        3. Go 默认安装路径
+        """
+        search_paths = [
+            nuclei_path,
+            os.path.expanduser('~/go/bin/nuclei'),
+            '/usr/local/bin/nuclei',
+        ]
+
+        for path in search_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return path
+        return None
+
+    def _get_nuclei_version(self) -> str:
+        """获取 nuclei 版本号"""
+        try:
+            result = subprocess.run(
+                [self.nuclei_path, '-version'],
+                capture_output=True, text=True, timeout=10
+            )
+            # nuclei 输出可能在 stdout 或 stderr
+            output = (result.stdout + "\n" + result.stderr).strip()
+            if output:
+                return output.split('\n')[0]
+        except Exception as e:
+            logger.debug(f"获取 nuclei 版本失败: {e}")
+        return ""
+
+    def _count_templates(self) -> int:
+        """统计 nuclei 模板数量"""
+        try:
+            # 尝试 nuclei -tl 列出模板
+            result = subprocess.run(
+                [self.nuclei_path, '-tl'],
+                capture_output=True, text=True, timeout=30
+            )
+            # nuclei -tl 输出每行一个模板路径
+            lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
+            if len(lines) > 0:
+                return len(lines)
+
+            # 备选：检查模板目录
+            for tmpl_dir in [DEFAULT_NUCLEI_TEMPLATES_PATH]:
+                if os.path.isdir(tmpl_dir):
+                    count = sum(1 for _ in os.walk(tmpl_dir))
+                    return max(count - 1, 0)  # 减去根目录本身
+        except Exception as e:
+            logger.debug(f"统计模板数量失败: {e}")
+        return 0
 
     def scan(self, target: str) -> Dict:
         """
@@ -56,14 +144,22 @@ class VulnerabilityScanner:
         vulns.extend(self._check_http_headers(target))
 
         # 2. nuclei 漏洞扫描（核心）
-        if self._nuclei_available:
+        if self._nuclei_available and self._templates_count > 0:
             vulns.extend(self._scan_with_nuclei(target))
-        else:
+        elif self._nuclei_available and self._templates_count == 0:
+            # nuclei 可用但没有模板
+            vulns.append({
+                'name': 'nuclei 模板未安装',
+                'severity': 'INFO',
+                'description': 'nuclei 已安装但模板库为空，请运行: nuclei -ut 下载漏洞模板',
+                'url': target
+            })
+        elif not self._nuclei_available:
             vulns.append({
                 'name': 'nuclei 未安装',
                 'severity': 'INFO',
-                'description': '未检测到 nuclei，仅执行了 HTTP 安全头检查。'
-                               '请运行: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
+                'description': '未检测到 nuclei。安装方法: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest  '
+                               '然后运行 nuclei -ut 更新模板',
                 'url': target
             })
 
@@ -88,7 +184,10 @@ class VulnerabilityScanner:
             'low': low,
             'info': info,
             'duration': round(duration, 2),
-            'scan_time': start_time.strftime('%Y-%m-%d %H:%M:%S')
+            'scan_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'nuclei_available': self._nuclei_available,
+            'nuclei_version': self._nuclei_version,
+            'templates_count': self._templates_count,
         }
 
     def _scan_with_nuclei(self, target: str) -> List[Dict]:
@@ -101,7 +200,7 @@ class VulnerabilityScanner:
         Returns:
             漏洞列表
         """
-        logger.info(f"使用 nuclei 扫描: {target}")
+        logger.info(f"使用 nuclei 扫描: {target} (模板数: {self._templates_count})")
         vulns = []
 
         cmd = [
@@ -111,7 +210,8 @@ class VulnerabilityScanner:
             "-silent",
             "-no-color",
             "-timeout", "10",
-            "-retries", "1"
+            "-retries", "1",
+            "-c", "50",  # 并发模板数，避免资源耗尽
         ]
 
         try:
@@ -122,12 +222,14 @@ class VulnerabilityScanner:
                 timeout=300
             )
 
-            # nuclei 的 JSON 输出是每行一个 JSON 对象
-            # 错误信息输出到 stderr
+            # 记录 nuclei 的 stderr 用于调试
             if result.stderr:
-                stderr_lower = result.stderr.lower()
-                if 'error' in stderr_lower:
-                    logger.warning(f"nuclei 警告: {result.stderr.strip()[:200]}")
+                stderr_lines = result.stderr.strip().split('\n')
+                for line in stderr_lines:
+                    line_lower = line.lower()
+                    # 只记录有意义的警告和错误
+                    if any(kw in line_lower for kw in ['error', 'warn', 'fail', 'cannot', 'unable']):
+                        logger.warning(f"nuclei: {line.strip()[:200]}")
 
             # 解析 stdout 中的 JSON 行
             for line in result.stdout.strip().split('\n'):
@@ -141,32 +243,25 @@ class VulnerabilityScanner:
 
         except subprocess.TimeoutExpired:
             logger.error("nuclei 扫描超时（300秒）")
-        except FileNotFoundError:
-            logger.error("nuclei 未找到")
-            self._nuclei_available = False
+            vulns.append({
+                'name': '扫描超时',
+                'severity': 'INFO',
+                'description': 'nuclei 扫描超过300秒被强制终止，可尝试缩小扫描范围',
+                'url': target
+            })
         except Exception as e:
             logger.error(f"nuclei 扫描失败: {e}")
+            vulns.append({
+                'name': '扫描异常',
+                'severity': 'INFO',
+                'description': f'nuclei 执行出错: {str(e)[:100]}',
+                'url': target
+            })
 
         return vulns
 
     def _parse_nuclei_line(self, line: str) -> Dict:
-        """
-        解析 nuclei 单行 JSON 输出
-
-        nuclei 输出格式:
-        {
-            "template-id": "cve-2021-41773",
-            "info": {
-                "name": "Apache Path Traversal",
-                "severity": "high",
-                "description": "...",
-                "tags": ["cve", "apache", "lfi"]
-            },
-            "matched-at": "http://target/cgi-bin/...",
-            "host": "http://target",
-            "type": "http"
-        }
-        """
+        """解析 nuclei 单行 JSON 输出"""
         try:
             data = json.loads(line)
 
@@ -178,11 +273,9 @@ class VulnerabilityScanner:
             template_id = data.get('template-id', '')
             tags = info.get('tags', [])
 
-            # 如果没有描述，用 tags 组合一个
             if not description and tags:
                 description = f"Tags: {', '.join(tags)}"
 
-            # 构建显示名称
             display_name = name
             if template_id:
                 display_name = f"[{template_id}] {name}"
@@ -196,8 +289,7 @@ class VulnerabilityScanner:
                 'tags': tags
             }
 
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.debug(f"解析 nuclei 输出失败: {e}")
+        except (json.JSONDecodeError, KeyError, TypeError):
             return None
 
     def _check_http_headers(self, url: str) -> List[Dict]:
@@ -222,7 +314,6 @@ class VulnerabilityScanner:
             headers = response.headers
             header_keys = [k.lower() for k in headers.keys()]
 
-            # 安全头部检查
             if 'x-frame-options' not in header_keys:
                 vulns.append({
                     'name': '缺少 X-Frame-Options',
@@ -247,7 +338,6 @@ class VulnerabilityScanner:
                     'url': url
                 })
 
-            # 服务器信息泄露
             if 'server' in headers:
                 vulns.append({
                     'name': '服务器信息泄露',
@@ -256,7 +346,6 @@ class VulnerabilityScanner:
                     'url': url
                 })
 
-            # 检查X-Powered-By
             if 'x-powered-by' in headers:
                 vulns.append({
                     'name': '技术栈泄露',
@@ -294,15 +383,21 @@ class VulnerabilityScanner:
 if __name__ == "__main__":
     scanner = VulnerabilityScanner()
 
-    targets = [
-        "http://testphp.vulnweb.com",
-    ]
+    print(f"nuclei 可用: {scanner._nuclei_available}")
+    print(f"nuclei 版本: {scanner._nuclei_version}")
+    print(f"模板数量: {scanner._templates_count}")
 
-    for target in targets:
-        print(f"\n{'='*50}")
-        print(f"扫描: {target}")
-        print('='*50)
-        result = scanner.scan(target)
-        print(f"发现 {result['total']} 个问题 (nuclei 可用: {scanner._nuclei_available})")
+    if scanner._nuclei_available:
+        targets = ["http://testphp.vulnweb.com"]
+        for target in targets:
+            print(f"\n{'='*50}")
+            print(f"扫描: {target}")
+            result = scanner.scan(target)
+            print(f"发现 {result['total']} 个问题")
+            for v in result['vulnerabilities']:
+                print(f"  [{v['severity']}] {v['name']}: {v['description'][:80]}")
+    else:
+        print("nuclei 不可用，仅执行 HTTP 头检查")
+        result = scanner.scan("http://127.0.0.1")
         for v in result['vulnerabilities']:
-            print(f"  [{v['severity']}] {v['name']}: {v['description'][:80]}")
+            print(f"  [{v['severity']}] {v['name']}")

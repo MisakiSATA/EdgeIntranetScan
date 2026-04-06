@@ -258,9 +258,19 @@ def api_scan_ports():
         }), 500
 
 
+# 漏洞扫描状态（用于异步查询）
+_vuln_scan_status = {
+    'scanning': False,
+    'progress': '',
+    'result': None,
+    'error': None
+}
+
+
 @app.route('/api/scan/vulns', methods=['POST'])
 def api_scan_vulns():
-    """漏洞扫描API"""
+    """漏洞扫描API（异步执行）"""
+    global _vuln_scan_status
     data = request.json
     target = data.get('target')
 
@@ -270,22 +280,67 @@ def api_scan_vulns():
             'message': '请指定目标'
         }), 400
 
-    try:
-        scanner = VulnerabilityScanner()
-        result = scanner.scan(target)
-
-        return jsonify({
-            'success': True,
-            'message': f'扫描完成，发现 {result["total"]} 个问题',
-            'data': result
-        })
-
-    except Exception as e:
-        logger.error(f"漏洞扫描失败: {e}")
+    if _vuln_scan_status['scanning']:
         return jsonify({
             'success': False,
-            'message': f'扫描失败: {str(e)}'
-        }), 500
+            'message': '已有扫描任务正在执行，请等待完成'
+        }), 409
+
+    # 确保目标有协议前缀
+    if not target.startswith(('http://', 'https://')):
+        target = 'http://' + target
+
+    # 标记为扫描中
+    _vuln_scan_status = {
+        'scanning': True,
+        'progress': 'nuclei 正在扫描...',
+        'result': None,
+        'error': None
+    }
+
+    import threading
+
+    def run_vuln_scan():
+        global _vuln_scan_status
+        try:
+            scanner = VulnerabilityScanner()
+            result = scanner.scan(target)
+            _vuln_scan_status['result'] = result
+            _vuln_scan_status['progress'] = '扫描完成'
+        except Exception as e:
+            logger.error(f"漏洞扫描失败: {e}")
+            _vuln_scan_status['error'] = str(e)
+            _vuln_scan_status['progress'] = '扫描失败'
+        finally:
+            _vuln_scan_status['scanning'] = False
+
+    thread = threading.Thread(target=run_vuln_scan)
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({
+        'success': True,
+        'message': f'漏洞扫描已启动，目标: {target}'
+    })
+
+
+@app.route('/api/scan/vulns/status')
+def api_scan_vulns_status():
+    """查询漏洞扫描状态"""
+    status = {
+        'scanning': _vuln_scan_status['scanning'],
+        'progress': _vuln_scan_status['progress'],
+    }
+
+    if _vuln_scan_status['result'] is not None:
+        status['result'] = _vuln_scan_status['result']
+        _vuln_scan_status['result'] = None  # 只返回一次
+
+    if _vuln_scan_status['error'] is not None:
+        status['error'] = _vuln_scan_status['error']
+        _vuln_scan_status['error'] = None
+
+    return jsonify(status)
 
 
 @app.route('/api/hosts')
