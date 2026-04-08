@@ -7,6 +7,7 @@
 import subprocess
 import shutil
 import os
+import re
 import json
 import logging
 import requests
@@ -140,6 +141,25 @@ class VulnerabilityScanner:
         if not target.startswith(('http://', 'https://')):
             target = 'http://' + target
 
+        # 校验 URL 格式
+        if not re.match(r'^https?://[\w.\-]+', target):
+            return {
+                'success': False,
+                'target': target,
+                'vulnerabilities': [{
+                    'name': 'URL 格式无效',
+                    'severity': 'INFO',
+                    'description': f'目标地址格式不正确: {target}，正确格式如 http://192.168.1.1 或 https://example.com',
+                    'url': target
+                }],
+                'total': 1, 'critical': 0, 'high': 0, 'medium': 0,
+                'low': 0, 'info': 1, 'duration': 0,
+                'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'nuclei_available': self._nuclei_available,
+                'nuclei_version': self._nuclei_version,
+                'templates_count': self._templates_count,
+            }
+
         # 1. HTTP 安全头检查（始终执行，快速）
         vulns.extend(self._check_http_headers(target))
 
@@ -206,8 +226,7 @@ class VulnerabilityScanner:
         cmd = [
             self.nuclei_path,
             "-u", target,
-            "-json",
-            "-silent",
+            "-jsonl",
             "-no-color",
             "-timeout", "10",
             "-retries", "1",
@@ -215,40 +234,53 @@ class VulnerabilityScanner:
         ]
 
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
 
-            # 记录 nuclei 的 stderr 用于调试
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split('\n')
-                for line in stderr_lines:
-                    line_lower = line.lower()
-                    # 只记录有意义的警告和错误
-                    if any(kw in line_lower for kw in ['error', 'warn', 'fail', 'cannot', 'unable']):
-                        logger.warning(f"nuclei: {line.strip()[:200]}")
+            try:
+                stdout, stderr = proc.communicate(timeout=300)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+                logger.error("nuclei 扫描超时（300秒），进程已终止")
+                vulns.append({
+                    'name': '扫描超时',
+                    'severity': 'INFO',
+                    'description': 'nuclei 扫描超过300秒被强制终止，可尝试缩小扫描范围',
+                    'url': target
+                })
+                return vulns
 
-            # 解析 stdout 中的 JSON 行
-            for line in result.stdout.strip().split('\n'):
+            # 记录全部 stderr 用于调试
+            if stderr:
+                for line in stderr.strip().split('\n'):
+                    line = line.strip()
+                    if line:
+                        logger.warning(f"nuclei stderr: {line[:200]}")
+
+            # 检查进程退出码
+            if proc.returncode != 0:
+                logger.error(f"nuclei 退出码: {proc.returncode}")
+
+            # 解析 stdout 中的 JSON 行，同时捕获非 JSON 的错误信息
+            for line in stdout.strip().split('\n'):
                 if not line:
                     continue
                 vuln = self._parse_nuclei_line(line)
                 if vuln:
                     vulns.append(vuln)
+                elif proc.returncode != 0:
+                    # nuclei v3 部分错误信息输出到 stdout 而非 stderr
+                    logger.warning(f"nuclei stdout(non-JSON): {line[:200]}")
 
             logger.info(f"nuclei 扫描完成，发现 {len(vulns)} 个漏洞")
 
-        except subprocess.TimeoutExpired:
-            logger.error("nuclei 扫描超时（300秒）")
-            vulns.append({
-                'name': '扫描超时',
-                'severity': 'INFO',
-                'description': 'nuclei 扫描超过300秒被强制终止，可尝试缩小扫描范围',
-                'url': target
-            })
+        except FileNotFoundError:
+            logger.error("nuclei 可执行文件不存在")
         except Exception as e:
             logger.error(f"nuclei 扫描失败: {e}")
             vulns.append({
