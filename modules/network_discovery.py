@@ -83,6 +83,28 @@ class NetworkDiscovery:
         conn.commit()
         conn.close()
 
+    def _run_nmap(self, cmd: List[str], timeout: int = 180) -> subprocess.CompletedProcess:
+        """运行nmap命令，优先使用sudo以获取MAC地址"""
+        # 尝试sudo运行（需要root权限才能通过ARP获取MAC地址）
+        try:
+            result = subprocess.run(
+                ["sudo"] + cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            if result.returncode == 0:
+                return result
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        # 回退到普通运行
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+
     def scan(self, top_ports: int = 100) -> List[Dict]:
         """
         扫描网段
@@ -103,12 +125,7 @@ class NetworkDiscovery:
                 self.network
             ]
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=180
-            )
+            result = self._run_nmap(cmd, timeout=180)
 
             hosts = self._parse_hosts(result.stdout)
 
@@ -185,12 +202,7 @@ class NetworkDiscovery:
                 ip
             ]
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
+            result = self._run_nmap(cmd, timeout=120)
 
             ports = []
             root = ET.fromstring(result.stdout)

@@ -374,10 +374,9 @@ def api_system_info():
 @app.route('/api/system/interfaces')
 def api_system_interfaces():
     """获取网络接口列表"""
-    import netifaces
-
     interfaces = []
     try:
+        import netifaces
         for iface in netifaces.interfaces():
             if iface != 'lo':
                 interfaces.append(iface)
